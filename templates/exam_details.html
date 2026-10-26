@@ -1,0 +1,89 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam Details | Smart Eval</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6fb;
+            margin: 0;
+            padding: 30px;
+            color: #1f2937;
+        }
+        .container {
+            max-width: 850px;
+            margin: auto;
+        }
+        .header, .question {
+            background: white;
+            padding: 22px;
+            border-radius: 12px;
+            margin-bottom: 18px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+        .question h3 { margin-top: 0; }
+        .badge {
+            display: inline-block;
+            background: #e0e7ff;
+            color: #3730a3;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+        }
+        .muted { color: #6b7280; }
+        a { color: #4f46e5; text-decoration: none; }
+        .answer {
+            background: #f9fafb;
+            padding: 12px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <p><a href="{{ url_for('my_exams') }}">← Back to My Exams</a></p>
+
+    <div class="header">
+        <h1>{{ exam.title }}</h1>
+        <p class="muted">Subject: {{ exam.subject }}</p>
+        <p><strong>Total Marks:</strong> {{ exam.total_marks }}</p>
+        <p><strong>Questions:</strong> {{ questions|length }}</p>
+    </div>
+
+    {% for question in questions %}
+    <div class="question">
+        <span class="badge">{{ question.question_type|upper }}</span>
+        <h3>Question {{ loop.index }}</h3>
+        <p>{{ question.question_text }}</p>
+        <p><strong>Marks:</strong> {{ question.marks }}</p>
+
+        {% if question.question_type == 'mcq' and question.options_json %}
+            <p><strong>Options:</strong></p>
+            <ol type="A">
+               {% for letter, option in question.options_json.items() %}
+<li>{{ letter }}. {{ option }}</li>
+{% endfor %}
+            </ol>
+        {% endif %}
+
+        {% if question.answer_key %}
+        <p><strong>Answer Key:</strong></p>
+        <div class="answer">{{ question.answer_key }}</div>
+        {% endif %}
+
+        {% if question.marking_rubric %}
+        <p><strong>Marking Rubric:</strong></p>
+        <div class="answer">{{ question.marking_rubric }}</div>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="question">No questions found for this exam.</div>
+    {% endfor %}
+</div>
+</body>
+</html>
+```

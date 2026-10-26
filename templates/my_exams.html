@@ -1,0 +1,192 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Exams | Smart Eval</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 30px 20px;
+            font-family: Arial, sans-serif;
+            background: #f4f6fb;
+            color: #1f2937;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        h1 {
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #6b7280;
+            margin-top: 0;
+        }
+
+        .button {
+            display: inline-block;
+            padding: 12px 18px;
+            background: #4f46e5;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+
+        .button:hover {
+            background: #4338ca;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #4f46e5;
+            text-decoration: none;
+        }
+
+        .exam-card {
+            background: white;
+            border-radius: 12px;
+            padding: 22px;
+            margin-bottom: 18px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+
+        .exam-card h2 {
+            margin: 0 0 10px;
+        }
+
+        .exam-card h2 a {
+            color: #312e81;
+            text-decoration: none;
+        }
+
+        .exam-card h2 a:hover {
+            text-decoration: underline;
+        }
+
+        .details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            color: #6b7280;
+            margin: 15px 0;
+        }
+
+        .view-link {
+            color: #4f46e5;
+            font-weight: bold;
+            text-decoration: none;
+        }
+
+        .empty-state {
+            background: white;
+            padding: 45px 20px;
+            text-align: center;
+            border-radius: 12px;
+            box-shadow: 0 3px 12px #0000000d;
+        }
+
+        .flash {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+    <a class="back-link" href="{{ url_for('teacher_dashboard') }}">
+        ← Back to Dashboard
+    </a>
+
+    <div class="header">
+        <div>
+            <h1>My Exams</h1>
+            <p class="subtitle">Manage the exams you've created.</p>
+        </div>
+
+        <a class="button" href="{{ url_for('create_exam') }}">
+            + Create New Exam
+        </a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div class="flash">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    {% if exams %}
+        {% for exam in exams %}
+            <div class="exam-card">
+
+                <h2>
+                    <a href="{{ url_for('exam_details', exam_id=exam['id']) }}">
+                        {{ exam['title'] }}
+                    </a>
+                </h2>
+
+                <p class="subtitle">
+                    Subject: {{ exam['subject'] }}
+                </p>
+
+                <div class="details">
+                    <span>
+                        <strong>Total Marks:</strong>
+                        {{ exam['total_marks'] }}
+                    </span>
+
+                    <span>
+                        <strong>Questions:</strong>
+                        {{ exam['question_count'] }}
+                    </span>
+                </div>
+
+                <a class="view-link"
+                   href="{{ url_for('exam_details', exam_id=exam['id']) }}">
+                    View Exam Details →
+                </a>
+
+            </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty-state">
+            <h2>No exams yet</h2>
+            <p class="subtitle">
+                Create your first exam to see it listed here.
+            </p>
+            <a class="button" href="{{ url_for('create_exam') }}">
+                Create Your First Exam
+            </a>
+        </div>
+    {% endif %}
+
+</div>
+</body>
+</html>

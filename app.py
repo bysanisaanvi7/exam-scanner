@@ -1,5 +1,6 @@
 
 import os
+import json
 import sqlite3
 from functools import wraps
 
@@ -18,6 +19,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from database import get_connection, initialize_database
 
+
+# -------------------- APP CONFIGURATION --------------------
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -32,19 +36,6 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
 )
-
-
-# -------------------- PUBLIC PAGES --------------------
-
-@app.route("/")
-@app.route("/home")
-def home_page():
-    return render_template("index.html")
-
-
-@app.route("/health")
-def health():
-    return jsonify({"status": "healthy"})
 
 
 # -------------------- AUTHENTICATION HELPERS --------------------
@@ -74,6 +65,19 @@ def role_required(required_role):
             return view(*args, **kwargs)
         return wrapped_view
     return decorator
+
+
+# -------------------- PUBLIC PAGES --------------------
+
+@app.route("/")
+@app.route("/home")
+def home_page():
+    return render_template("index.html")
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy"})
 
 
 # -------------------- REGISTRATION --------------------
@@ -167,6 +171,8 @@ def logout():
     return redirect(url_for("login"))
 
 
+# -------------------- DASHBOARD REDIRECT --------------------
+
 @app.route("/dashboard")
 @login_required
 def dashboard():
@@ -187,7 +193,7 @@ def teacher_dashboard():
             SELECT id, title, subject, total_marks
             FROM exams
             WHERE teacher_id = ?
-            ORDER BY created_at DESC
+            ORDER BY id DESC
             """,
             (session["user_id"],),
         ).fetchall()
@@ -211,20 +217,297 @@ def student_dashboard():
     )
 
 
-# -------------------- PLACEHOLDER ROUTES --------------------
-# These pages will be implemented in upcoming steps.
+# -------------------- MY EXAMS --------------------
 
 @app.route("/teacher/exams")
 @role_required("teacher")
 def my_exams():
-    return "My Exams page is coming soon."
+    with get_connection() as connection:
+        exams = connection.execute(
+            """
+            SELECT
+                e.id,
+                e.title,
+                e.subject,
+                e.total_marks,
+                COUNT(q.id) AS question_count
+            FROM exams e
+            LEFT JOIN questions q ON q.exam_id = e.id
+            WHERE e.teacher_id = ?
+            GROUP BY e.id, e.title, e.subject, e.total_marks
+            ORDER BY e.id DESC
+            """,
+            (session["user_id"],),
+        ).fetchall()
+
+    return render_template("my_exams.html", exams=exams)
 
 
-@app.route("/teacher/create-exam")
+# -------------------- EXAM DETAILS --------------------
+
+@app.route("/teacher/exams/<int:exam_id>")
+@role_required("teacher")
+def exam_details(exam_id):
+    with get_connection() as connection:
+        exam = connection.execute(
+            """
+            SELECT id, title, subject, total_marks
+            FROM exams
+            WHERE id = ? AND teacher_id = ?
+            """,
+            (exam_id, session["user_id"]),
+        ).fetchone()
+
+        if exam is None:
+            flash("Exam not found.")
+            return redirect(url_for("my_exams"))
+
+        rows = connection.execute(
+            """
+            SELECT
+                question_text,
+                question_type,
+                marks,
+                answer_key,
+                options_json,
+                marking_rubric
+            FROM questions
+            WHERE exam_id = ?
+            ORDER BY id ASC
+            """,
+            (exam_id,),
+        ).fetchall()
+
+    questions = []
+
+    for row in rows:
+        question = dict(row)
+
+        try:
+            question["options_json"] = (
+                json.loads(question["options_json"])
+                if question["options_json"]
+                else {}
+            )
+        except (json.JSONDecodeError, TypeError):
+            question["options_json"] = {}
+
+        questions.append(question)
+
+    return render_template(
+        "exam_details.html",
+        exam=exam,
+        questions=questions,
+    )
+
+
+# -------------------- CREATE EXAM --------------------
+
+@app.route("/teacher/create-exam", methods=["GET", "POST"])
 @role_required("teacher")
 def create_exam():
-    return "Create Exam page is coming soon."
+    if request.method == "GET":
+        return render_template("create_exam.html")
 
+    title = request.form.get("title", "").strip()
+    subject = request.form.get("subject", "").strip()
+
+    try:
+        total_marks = float(request.form.get("total_marks", "0"))
+    except (TypeError, ValueError):
+        flash("Please enter valid total marks.")
+        return redirect(url_for("create_exam"))
+
+    if (
+        not title
+        or len(title) > 150
+        or not subject
+        or len(subject) > 100
+        or not (0 < total_marks <= 10000)
+    ):
+        flash("Please enter valid exam details.")
+        return redirect(url_for("create_exam"))
+
+    types = request.form.getlist("question_type")
+    texts = request.form.getlist("question_text")
+    marks_values = request.form.getlist("marks")
+
+    if not texts or not (
+        len(types) == len(texts) == len(marks_values)
+    ):
+        flash("Please add at least one complete question.")
+        return redirect(url_for("create_exam"))
+
+    option_lists = {
+        letter: request.form.getlist(f"option_{letter.lower()}")
+        for letter in ("A", "B", "C", "D")
+    }
+
+    correct_options = request.form.getlist("correct_option")
+    answers = request.form.getlist("answer_key")
+    rubrics = request.form.getlist("marking_rubric")
+
+    questions = []
+    total_question_marks = 0
+    mcq_index = 0
+    descriptive_index = 0
+
+    for i, (q_type, text, mark_value) in enumerate(
+        zip(types, texts, marks_values), start=1
+    ):
+        text = text.strip()
+
+        try:
+            marks = float(mark_value)
+        except (TypeError, ValueError):
+            flash(f"Invalid marks for question {i}.")
+            return redirect(url_for("create_exam"))
+
+        if (
+            not text
+            or len(text) > 10000
+            or not (0 < marks <= total_marks)
+        ):
+            flash(f"Please check question {i} and its marks.")
+            return redirect(url_for("create_exam"))
+
+        question = {
+            "type": q_type,
+            "text": text,
+            "marks": marks,
+            "answer_key": "",
+            "options_json": None,
+            "rubric": None,
+        }
+
+        if q_type == "mcq":
+            if any(
+                mcq_index >= len(option_lists[letter])
+                for letter in ("A", "B", "C", "D")
+            ):
+                flash(f"Please complete all options for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            options = {
+                letter: option_lists[letter][mcq_index].strip()
+                for letter in ("A", "B", "C", "D")
+            }
+
+            if any(not option for option in options.values()):
+                flash(f"Please complete all options for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            if mcq_index >= len(correct_options):
+                flash(f"Please select the correct answer for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            correct = correct_options[mcq_index]
+
+            if correct not in options:
+                flash(f"Invalid correct option for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            question["answer_key"] = correct
+            question["options_json"] = json.dumps(options)
+            mcq_index += 1
+
+        elif q_type == "descriptive":
+            if descriptive_index >= len(answers):
+                flash(f"Please enter the reference answer for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            answer = answers[descriptive_index].strip()
+
+            rubric = (
+                rubrics[descriptive_index].strip()
+                if descriptive_index < len(rubrics)
+                else ""
+            )
+
+            if (
+                not answer
+                or len(answer) > 20000
+                or len(rubric) > 10000
+            ):
+                flash(f"Please check the reference answer for question {i}.")
+                return redirect(url_for("create_exam"))
+
+            question["answer_key"] = answer
+            question["rubric"] = rubric or None
+            descriptive_index += 1
+
+        else:
+            flash(f"Invalid question type for question {i}.")
+            return redirect(url_for("create_exam"))
+
+        total_question_marks += marks
+        questions.append(question)
+
+    if (
+        mcq_index != len(correct_options)
+        or descriptive_index != len(answers)
+    ):
+        flash("Please check your question answers.")
+        return redirect(url_for("create_exam"))
+
+    if abs(total_question_marks - total_marks) > 0.001:
+        flash("Question marks must add up to the exam total.")
+        return redirect(url_for("create_exam"))
+
+    try:
+        with get_connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO exams (
+                    title, subject, teacher_id, total_marks
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    title,
+                    subject,
+                    session["user_id"],
+                    total_marks,
+                ),
+            )
+
+            exam_id = cursor.lastrowid
+
+            for question in questions:
+                connection.execute(
+                    """
+                    INSERT INTO questions (
+                        exam_id,
+                        question_text,
+                        question_type,
+                        marks,
+                        answer_key,
+                        options_json,
+                        marking_rubric
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        exam_id,
+                        question["text"],
+                        question["type"],
+                        question["marks"],
+                        question["answer_key"],
+                        question["options_json"],
+                        question["rubric"],
+                    ),
+                )
+
+    except sqlite3.Error:
+        app.logger.exception("Failed to save exam")
+        flash("Could not save the exam. Please try again.")
+        return redirect(url_for("create_exam"))
+
+    flash("Exam and answer keys saved successfully.")
+    return redirect(url_for("my_exams"))
+
+
+# -------------------- TEACHER RESULTS --------------------
 
 @app.route("/teacher/results")
 @role_required("teacher")

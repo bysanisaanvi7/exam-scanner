@@ -1,0 +1,195 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Exam | Smart Eval</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; color: #172033; }
+        nav { padding: 20px 6%; background: white; border-bottom: 1px solid #e5e7eb; }
+        nav a { color: #4f46e5; text-decoration: none; font-weight: bold; }
+        main { max-width: 800px; margin: 35px auto; padding: 0 20px; }
+        .card { background: white; padding: 28px; border: 1px solid #e5e7eb; border-radius: 16px; margin-bottom: 22px; }
+        label { display: block; font-weight: bold; margin: 16px 0 7px; }
+        input, textarea, select { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; background: white; }
+        textarea { min-height: 90px; resize: vertical; }
+        button { padding: 12px 17px; border: 0; border-radius: 8px; background: #4f46e5; color: white; font-weight: bold; cursor: pointer; }
+        .secondary { background: #e0e7ff; color: #3730a3; }
+        .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+        .question { border-top: 1px solid #e5e7eb; padding-top: 20px; margin-top: 20px; }
+        .message { background: #fff1f2; color: #be123c; padding: 12px; border-radius: 8px; }
+        .remove { background: #fee2e2; color: #991b1b; margin-top: 12px; }
+        @media(max-width: 550px) { .card { padding: 18px; } }
+    </style>
+</head>
+<body>
+<nav>
+    <a href="{{ url_for('teacher_dashboard') }}">← Smart Eval · Teacher Dashboard</a>
+</nav>
+
+<main>
+    <h1>Create an exam</h1>
+    <p>Create an exam and add the official answers for evaluation.</p>
+
+    {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+            <p class="message">{{ message }}</p>
+        {% endfor %}
+    {% endwith %}
+
+    <form method="POST" id="examForm">
+        <section class="card">
+            <h2>Exam details</h2>
+
+            <label for="title">Exam title</label>
+            <input id="title" name="title" required maxlength="150"
+                   placeholder="e.g. Data Structures Internal Assessment">
+
+            <label for="subject">Subject</label>
+            <input id="subject" name="subject" required maxlength="100"
+                   placeholder="e.g. Data Structures">
+
+            <label for="total_marks">Total marks</label>
+            <input id="total_marks" name="total_marks" type="number"
+                   min="0.5" max="10000" step="0.5" required value="5">
+        </section>
+
+        <section class="card">
+            <h2>Questions and answer keys</h2>
+            <p>Add at least one question. Each question needs its own marks.</p>
+
+            <div id="questions"></div>
+
+            <div class="actions">
+                <button type="button" class="secondary" onclick="addQuestion('mcq')">
+                    + Add MCQ
+                </button>
+                <button type="button" class="secondary" onclick="addQuestion('descriptive')">
+                    + Add descriptive question
+                </button>
+            </div>
+        </section>
+
+        <button type="submit">Save Exam and Answer Keys</button>
+    </form>
+</main>
+
+<script>
+let questionCount = 0;
+
+function addQuestion(type) {
+    questionCount++;
+
+    const container = document.createElement("section");
+    container.className = "question";
+    container.dataset.questionType = type;
+
+    const typeInput = document.createElement("input");
+    typeInput.type = "hidden";
+    typeInput.name = "question_type";
+    typeInput.value = type;
+    container.appendChild(typeInput);
+
+    const heading = document.createElement("h3");
+    heading.textContent = `Question ${questionCount} — ${type === "mcq" ? "MCQ" : "Descriptive"}`;
+    container.appendChild(heading);
+
+    function field(labelText, name, placeholder, tag = "input") {
+        const label = document.createElement("label");
+        label.textContent = labelText;
+
+        const element = document.createElement(tag);
+        element.name = name;
+        element.required = true;
+        element.placeholder = placeholder;
+
+        if (tag === "textarea") element.rows = 3;
+
+        container.appendChild(label);
+        container.appendChild(element);
+        return element;
+    }
+
+    field("Question text", "question_text", "Enter the question", "textarea");
+
+    const marks = field("Marks", "marks", "e.g. 2");
+    marks.type = "number";
+    marks.min = "0.5";
+    marks.max = "10000";
+    marks.step = "0.5";
+
+    if (type === "mcq") {
+        ["a", "b", "c", "d"].forEach(letter => {
+            field(`Option ${letter.toUpperCase()}`, `option_${letter}`, `Enter option ${letter.toUpperCase()}`);
+        });
+
+        const label = document.createElement("label");
+        label.textContent = "Correct option";
+        container.appendChild(label);
+
+        const select = document.createElement("select");
+        select.name = "correct_option";
+        select.required = true;
+
+        ["A", "B", "C", "D"].forEach(option => {
+            const item = document.createElement("option");
+            item.value = option;
+            item.textContent = option;
+            select.appendChild(item);
+        });
+
+        container.appendChild(select);
+    } else {
+        field("Reference answer", "answer_key", "Enter the model answer", "textarea");
+        field("Marking rubric (optional)", "marking_rubric", "Key points and marks for each point", "textarea").required = false;
+    }
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "remove";
+    removeButton.textContent = "Remove question";
+    removeButton.addEventListener("click", () => {
+        container.remove();
+        renumberQuestions();
+    });
+    container.appendChild(removeButton);
+
+    document.getElementById("questions").appendChild(container);
+    renumberQuestions();
+}
+
+function renumberQuestions() {
+    document.querySelectorAll(".question").forEach((question, index) => {
+        const heading = question.querySelector("h3");
+        const type = question.dataset.questionType;
+        heading.textContent = `Question ${index + 1} — ${type === "mcq" ? "MCQ" : "Descriptive"}`;
+    });
+    questionCount = document.querySelectorAll(".question").length;
+}
+
+document.getElementById("examForm").addEventListener("submit", function(event) {
+    const questions = [...document.querySelectorAll(".question")];
+
+    if (questions.length === 0) {
+        event.preventDefault();
+        alert("Please add at least one question.");
+        return;
+    }
+
+    const total = Number(document.getElementById("total_marks").value);
+    const sum = questions.reduce((result, question) => {
+        return result + Number(question.querySelector('[name="marks"]').value || 0);
+    }, 0);
+
+    if (Math.abs(sum - total) > 0.001) {
+        event.preventDefault();
+        alert(`Question marks add up to ${sum}, but the exam total is ${total}. Please make them match.`);
+    }
+});
+
+addQuestion("mcq");
+</script>
+</body>
+</html>
