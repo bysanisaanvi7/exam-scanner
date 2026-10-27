@@ -20,7 +20,8 @@ def initialize_database():
                 name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
-                role TEXT NOT NULL CHECK (role IN ('student', 'teacher')),
+                role TEXT NOT NULL
+                    CHECK (role IN ('student', 'teacher')),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -42,6 +43,7 @@ def initialize_database():
                     CHECK (question_type IN ('mcq', 'descriptive')),
                 marks REAL NOT NULL,
                 answer_key TEXT NOT NULL,
+                options_json TEXT,
                 marking_rubric TEXT,
                 FOREIGN KEY (exam_id) REFERENCES exams(id)
                     ON DELETE CASCADE
@@ -54,8 +56,11 @@ def initialize_database():
                 file_path TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'uploaded'
                     CHECK (status IN (
-                        'uploaded', 'processing', 'review_required',
-                        'evaluated', 'failed'
+                        'uploaded',
+                        'processing',
+                        'review_required',
+                        'evaluated',
+                        'failed'
                     )),
                 total_marks_awarded REAL,
                 submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -79,8 +84,39 @@ def initialize_database():
             );
         """)
 
+        # Safely update existing databases without deleting user accounts.
+        question_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(questions)"
+            ).fetchall()
+        }
+
+        if "options_json" not in question_columns:
+            connection.execute(
+                "ALTER TABLE questions ADD COLUMN options_json TEXT"
+            )
+
+        if "marking_rubric" not in question_columns:
+            connection.execute(
+                "ALTER TABLE questions ADD COLUMN marking_rubric TEXT"
+            )
+
     print(f"Database initialized at: {DATABASE_PATH}")
 
 
 if __name__ == "__main__":
     initialize_database()
+
+    with get_connection() as connection:
+        tables = connection.execute("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+        """).fetchall()
+
+    print("Available tables:")
+    for table in tables:
+        print(f"- {table['name']}")

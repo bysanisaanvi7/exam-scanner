@@ -2,6 +2,8 @@
 import os
 import json
 import sqlite3
+from pathlib import Path
+from uuid import uuid4
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -16,15 +18,19 @@ from flask import (
     session,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 from database import get_connection, initialize_database
 
 
-# -------------------- APP CONFIGURATION --------------------
+# ============================================================
+# APP CONFIGURATION
+# ============================================================
 
 load_dotenv()
 
 app = Flask(__name__)
+
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY")
 
 if not app.config["SECRET_KEY"]:
@@ -35,10 +41,27 @@ if not app.config["SECRET_KEY"]:
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=10 * 1024 * 1024,
 )
 
+UPLOAD_FOLDER = Path(app.root_path) / "uploads"
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
-# -------------------- AUTHENTICATION HELPERS --------------------
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "pdf"}
+
+
+def allowed_file(filename):
+    return (
+        "." in filename
+        and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    )
+
+
+# ============================================================
+# AUTHENTICATION HELPERS
+# ============================================================
 
 def login_required(view):
     @wraps(view)
@@ -46,7 +69,9 @@ def login_required(view):
         if "user_id" not in session:
             flash("Please log in first.")
             return redirect(url_for("login"))
+
         return view(*args, **kwargs)
+
     return wrapped_view
 
 
@@ -63,11 +88,15 @@ def role_required(required_role):
                 return redirect(url_for("dashboard"))
 
             return view(*args, **kwargs)
+
         return wrapped_view
+
     return decorator
 
 
-# -------------------- PUBLIC PAGES --------------------
+# ============================================================
+# PUBLIC PAGES
+# ============================================================
 
 @app.route("/")
 @app.route("/home")
@@ -80,7 +109,9 @@ def health():
     return jsonify({"status": "healthy"})
 
 
-# -------------------- REGISTRATION --------------------
+# ============================================================
+# REGISTRATION
+# ============================================================
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
@@ -122,6 +153,7 @@ def register():
                     role,
                 ),
             )
+
     except sqlite3.IntegrityError:
         flash("An account with this email already exists.")
         return redirect(url_for("register"))
@@ -130,7 +162,9 @@ def register():
     return redirect(url_for("login"))
 
 
-# -------------------- LOGIN AND LOGOUT --------------------
+# ============================================================
+# LOGIN AND LOGOUT
+# ============================================================
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -171,7 +205,9 @@ def logout():
     return redirect(url_for("login"))
 
 
-# -------------------- DASHBOARD REDIRECT --------------------
+# ============================================================
+# DASHBOARD REDIRECT
+# ============================================================
 
 @app.route("/dashboard")
 @login_required
@@ -182,7 +218,9 @@ def dashboard():
     return redirect(url_for("student_dashboard"))
 
 
-# -------------------- TEACHER DASHBOARD --------------------
+# ============================================================
+# TEACHER DASHBOARD
+# ============================================================
 
 @app.route("/teacher")
 @role_required("teacher")
@@ -205,7 +243,9 @@ def teacher_dashboard():
     )
 
 
-# -------------------- STUDENT DASHBOARD --------------------
+# ============================================================
+# STUDENT DASHBOARD
+# ============================================================
 
 @app.route("/student")
 @role_required("student")
@@ -217,7 +257,9 @@ def student_dashboard():
     )
 
 
-# -------------------- MY EXAMS --------------------
+# ============================================================
+# MY EXAMS
+# ============================================================
 
 @app.route("/teacher/exams")
 @role_required("teacher")
@@ -243,7 +285,9 @@ def my_exams():
     return render_template("my_exams.html", exams=exams)
 
 
-# -------------------- EXAM DETAILS --------------------
+# ============================================================
+# EXAM DETAILS AND STUDENT SUBMISSIONS
+# ============================================================
 
 @app.route("/teacher/exams/<int:exam_id>")
 @role_required("teacher")
@@ -278,6 +322,24 @@ def exam_details(exam_id):
             (exam_id,),
         ).fetchall()
 
+        submissions = connection.execute(
+            """
+            SELECT
+                s.id,
+                s.file_path,
+                s.status,
+                s.total_marks_awarded,
+                s.submitted_at,
+                u.name AS student_name,
+                u.email AS student_email
+            FROM submissions s
+            JOIN users u ON u.id = s.student_id
+            WHERE s.exam_id = ?
+            ORDER BY s.submitted_at DESC
+            """,
+            (exam_id,),
+        ).fetchall()
+
     questions = []
 
     for row in rows:
@@ -298,10 +360,13 @@ def exam_details(exam_id):
         "exam_details.html",
         exam=exam,
         questions=questions,
+        submissions=submissions,
     )
 
 
-# -------------------- CREATE EXAM --------------------
+# ============================================================
+# CREATE EXAM
+# ============================================================
 
 @app.route("/teacher/create-exam", methods=["GET", "POST"])
 @role_required("teacher")
@@ -332,9 +397,7 @@ def create_exam():
     texts = request.form.getlist("question_text")
     marks_values = request.form.getlist("marks")
 
-    if not texts or not (
-        len(types) == len(texts) == len(marks_values)
-    ):
+    if not texts or not (len(types) == len(texts) == len(marks_values)):
         flash("Please add at least one complete question.")
         return redirect(url_for("create_exam"))
 
@@ -342,7 +405,6 @@ def create_exam():
         letter: request.form.getlist(f"option_{letter.lower()}")
         for letter in ("A", "B", "C", "D")
     }
-
     correct_options = request.form.getlist("correct_option")
     answers = request.form.getlist("answer_key")
     rubrics = request.form.getlist("marking_rubric")
@@ -363,11 +425,7 @@ def create_exam():
             flash(f"Invalid marks for question {i}.")
             return redirect(url_for("create_exam"))
 
-        if (
-            not text
-            or len(text) > 10000
-            or not (0 < marks <= total_marks)
-        ):
+        if not text or len(text) > 10000 or not (0 < marks <= total_marks):
             flash(f"Please check question {i} and its marks.")
             return redirect(url_for("create_exam"))
 
@@ -393,7 +451,7 @@ def create_exam():
                 for letter in ("A", "B", "C", "D")
             }
 
-            if any(not option for option in options.values()):
+            if any(not value for value in options.values()):
                 flash(f"Please complete all options for question {i}.")
                 return redirect(url_for("create_exam"))
 
@@ -402,7 +460,6 @@ def create_exam():
                 return redirect(url_for("create_exam"))
 
             correct = correct_options[mcq_index]
-
             if correct not in options:
                 flash(f"Invalid correct option for question {i}.")
                 return redirect(url_for("create_exam"))
@@ -417,18 +474,13 @@ def create_exam():
                 return redirect(url_for("create_exam"))
 
             answer = answers[descriptive_index].strip()
-
             rubric = (
                 rubrics[descriptive_index].strip()
                 if descriptive_index < len(rubrics)
                 else ""
             )
 
-            if (
-                not answer
-                or len(answer) > 20000
-                or len(rubric) > 10000
-            ):
+            if not answer or len(answer) > 20000 or len(rubric) > 10000:
                 flash(f"Please check the reference answer for question {i}.")
                 return redirect(url_for("create_exam"))
 
@@ -458,17 +510,10 @@ def create_exam():
         with get_connection() as connection:
             cursor = connection.execute(
                 """
-                INSERT INTO exams (
-                    title, subject, teacher_id, total_marks
-                )
+                INSERT INTO exams (title, subject, teacher_id, total_marks)
                 VALUES (?, ?, ?, ?)
                 """,
-                (
-                    title,
-                    subject,
-                    session["user_id"],
-                    total_marks,
-                ),
+                (title, subject, session["user_id"], total_marks),
             )
 
             exam_id = cursor.lastrowid
@@ -477,13 +522,8 @@ def create_exam():
                 connection.execute(
                     """
                     INSERT INTO questions (
-                        exam_id,
-                        question_text,
-                        question_type,
-                        marks,
-                        answer_key,
-                        options_json,
-                        marking_rubric
+                        exam_id, question_text, question_type, marks,
+                        answer_key, options_json, marking_rubric
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -506,8 +546,146 @@ def create_exam():
     flash("Exam and answer keys saved successfully.")
     return redirect(url_for("my_exams"))
 
+# ============================================================
+# UPLOAD ANSWER SHEET
+# ============================================================
 
-# -------------------- TEACHER RESULTS --------------------
+@app.route(
+    "/teacher/exams/<int:exam_id>/upload",
+    methods=["GET", "POST"],
+)
+@role_required("teacher")
+def upload_answer_sheet(exam_id):
+    with get_connection() as connection:
+        exam = connection.execute(
+            """
+            SELECT id, title, subject
+            FROM exams
+            WHERE id = ? AND teacher_id = ?
+            """,
+            (exam_id, session["user_id"]),
+        ).fetchone()
+
+    if exam is None:
+        flash("Exam not found.")
+        return redirect(url_for("my_exams"))
+
+    if request.method == "GET":
+        return render_template("upload_answer_sheet.html", exam=exam)
+
+    student_email = (
+        request.form.get("student_email", "").strip().lower()
+    )
+    uploaded_file = request.files.get("answer_sheet")
+
+    if (
+        not student_email
+        or len(student_email) > 254
+        or "@" not in student_email
+    ):
+        flash("Enter the student's registered email address.")
+        return redirect(
+            url_for("upload_answer_sheet", exam_id=exam_id)
+        )
+
+    if not uploaded_file or not uploaded_file.filename:
+        flash("Please choose an answer-sheet file.")
+        return redirect(
+            url_for("upload_answer_sheet", exam_id=exam_id)
+        )
+
+    original_filename = secure_filename(uploaded_file.filename)
+
+    if not original_filename or not allowed_file(original_filename):
+        flash("Upload a PDF, PNG, JPG, JPEG, or WEBP file.")
+        return redirect(
+            url_for("upload_answer_sheet", exam_id=exam_id)
+        )
+
+    extension = original_filename.rsplit(".", 1)[1].lower()
+    saved_filename = f"{uuid4().hex}.{extension}"
+    destination = UPLOAD_FOLDER / saved_filename
+
+    with get_connection() as connection:
+        student = connection.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE email = ? AND role = 'student'
+            """,
+            (student_email,),
+        ).fetchone()
+
+        if student is None:
+            flash("No student account found for that email.")
+            return redirect(
+                url_for("upload_answer_sheet", exam_id=exam_id)
+            )
+
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM submissions
+            WHERE exam_id = ? AND student_id = ?
+            """,
+            (exam_id, student["id"]),
+        ).fetchone()
+
+        if existing:
+            flash(
+                "This student already has a submission for this exam."
+            )
+            return redirect(
+                url_for("upload_answer_sheet", exam_id=exam_id)
+            )
+
+        try:
+            uploaded_file.save(destination)
+
+            connection.execute(
+                """
+                INSERT INTO submissions (
+                    exam_id, student_id, file_path, status
+                )
+                VALUES (?, ?, ?, 'uploaded')
+                """,
+                (exam_id, student["id"], saved_filename),
+            )
+
+        except sqlite3.IntegrityError:
+            destination.unlink(missing_ok=True)
+            flash(
+                "A submission already exists for this student and exam."
+            )
+            return redirect(
+                url_for("upload_answer_sheet", exam_id=exam_id)
+            )
+
+        except Exception:
+            destination.unlink(missing_ok=True)
+            app.logger.exception("Failed to save answer-sheet submission")
+            flash("Could not save the submission. Please try again.")
+            return redirect(
+                url_for("upload_answer_sheet", exam_id=exam_id)
+            )
+
+    flash("Answer sheet uploaded successfully!")
+    return redirect(url_for("exam_details", exam_id=exam_id))
+
+
+# ============================================================
+# HANDLE FILES THAT EXCEED THE UPLOAD LIMIT
+# ============================================================
+
+@app.errorhandler(413)
+def file_too_large(error):
+    flash("The file is too large. The maximum upload size is 10 MB.")
+    return redirect(url_for("my_exams"))
+
+
+# ============================================================
+# TEACHER RESULTS
+# ============================================================
 
 @app.route("/teacher/results")
 @role_required("teacher")
@@ -515,7 +693,9 @@ def teacher_results():
     return "Teacher Results page is coming soon."
 
 
-# -------------------- START APPLICATION --------------------
+# ============================================================
+# START APPLICATION
+# ============================================================
 
 if __name__ == "__main__":
     initialize_database()
